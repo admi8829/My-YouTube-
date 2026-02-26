@@ -1,98 +1,183 @@
+import { Bot, InlineKeyboard, Keyboard, webhookCallback } from "grammy";
+
+/**
+ * Cloudflare Worker Implementation
+ */
+
 export default {
   async fetch(request, env) {
-    const url = new URL(request.url);
+    if (request.method === "POST") {
+      const bot = new Bot(env.BOT_TOKEN);
 
-    // 1. የባክኤንድ ክፍል (API Logic)
-    if (url.pathname === "/api/download" && request.method === "POST") {
-      const { videoUrl } = await request.json();
+      // --- 1. Localization Strings ---
+      const strings = {
+        en: {
+          welcome: "Welcome! Please choose your language:",
+          request_contact: "Please share your phone number to complete registration.",
+          contact_button: "Share Phone Number 📱",
+          search_searching: "🔍 Searching for answers...",
+          search_no_result: "❌ I couldn't find any relevant information.",
+          broadcast_prompt: "Please send the message (text, image, video, document, etc.) you want to broadcast.",
+          broadcast_done: "✅ Broadcast finished. Sent to {count} users.",
+          admin_only: "⚠️ This command is for admins only.",
+          reg_success: "✅ Registration successful! You can now ask any question."
+        },
+        am: {
+          welcome: "እንኳን ደህና መጡ! እባክዎን ቋንቋ ይምረጡ፦",
+          request_contact: "እባክዎን ምዝገባውን ለማጠናቀቅ ስልክ ቁጥርዎን ያጋሩ።",
+          contact_button: "ስልክ ቁጥር ያጋሩ 📱",
+          search_searching: "🔍 በመፈለግ ላይ...",
+          search_no_result: "❌ ምንም ውጤት አልተገኘም።",
+          broadcast_prompt: "እባክዎን ለሁሉም እንዲላክ የሚፈልጉትን መልዕክት (ጽሁፍ፣ ምስል፣ ቪዲዮ...) ይላኩ።",
+          broadcast_done: "✅ መልዕክቱ ለ {count} ተጠቃሚዎች ተልኳል።",
+          admin_only: "⚠️ ይህ ለአድሚን ብቻ የተፈቀደ ነው።",
+          reg_success: "✅ ምዝገባው ተጠናቋል። አሁን የሚፈልጉትን ጥያቄ መጠየቅ ይችላሉ።"
+        },
+        or: {
+          welcome: "Baga nagaan dhuftan! Maaloo afaan keessan filadhaa:",
+          request_contact: "Maaloo galmee xumuruuf lakkoofsa bilbilaa keessan nuuf qoodaa.",
+          contact_button: "Lakkoofsa Bilbilaa Qoodi 📱",
+          search_searching: "🔍 Barbaadaa jira...",
+          search_no_result: "❌ Oofni hin argamne.",
+          broadcast_prompt: "Maaloo ergaa hundaaf dabarsuu barbaaddan ergaa.",
+          broadcast_done: "✅ Ergaan gara namoota {count} tti ergameera.",
+          admin_only: "⚠️ Kun admin qofaaf.",
+          reg_success: "✅ Galmeen xumurameera. Amma gaaffii keessan gaafachuu dandeessu."
+        }
+      };
 
-      try {
-        // Cobalt API በመጠቀም ዳውንሎድ ሊንክ ማመንጨት
-        const response = await fetch("https://api.cobalt.tools/api/json", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-          },
-          body: JSON.stringify({
-            url: videoUrl,
-            vQuality: "720",
-          }),
-        });
+      // --- 2. Middleware: Fetch User Data ---
+      // This runs on every request to identify the user
+      const getUser = async (ctx) => {
+        try {
+          const user = await env.DB.prepare("SELECT * FROM users WHERE id = ?")
+            .bind(ctx.from.id)
+            .run();
+          return user.results[0] || null;
+        } catch (e) {
+          return null;
+        }
+      };
 
-        const data = await response.json();
-        return new Response(JSON.stringify(data), {
-          headers: { "Content-Type": "application/json" },
-        });
-      } catch (error) {
-        return new Response(JSON.stringify({ status: "error", message: "Error fetching video" }), { status: 500 });
-      }
-    }
+      // --- 3. Commands & Handlers ---
 
-    // 2. የፍሮንትኤንድ ክፍል (HTML/UI)
-    const html = `
-    <!DOCTYPE html>
-    <html lang="am">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>CloudDownloader - YT</title>
-        <style>
-            body { font-family: sans-serif; background: #0f0f0f; color: white; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
-            .container { background: #222; padding: 30px; border-radius: 15px; width: 90%; max-width: 400px; text-align: center; border: 1px solid #333; }
-            h2 { color: #ff0000; }
-            input { width: 100%; padding: 12px; margin: 15px 0; border-radius: 8px; border: none; box-sizing: border-box; }
-            button { width: 100%; padding: 12px; background: #ff0000; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
-            #status { margin-top: 20px; word-break: break-all; }
-            .dl-link { display: inline-block; margin-top: 15px; padding: 10px 20px; background: #28a745; color: white; text-decoration: none; border-radius: 5px; }
-            .loader { border: 3px solid #333; border-top: 3px solid #ff0000; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; display: inline-block; }
-            @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h2>YT Downloader</h2>
-            <p style="font-size: 13px; color: #aaa;">በ Cloudflare Worker የሚሰራ</p>
-            <input type="text" id="vUrl" placeholder="የዩቲዩብ ሊንክ እዚህ ይለጥፉ...">
-            <button onclick="downloadVideo()" id="btn">ሊንኩን አዘጋጅ</button>
-            <div id="status"></div>
-        </div>
+      // /start Command
+      bot.command("start", async (ctx) => {
+        const keyboard = new InlineKeyboard()
+          .text("Amharic 🇪🇹", "lang_am")
+          .text("Afan Oromo 🇪🇹", "lang_or")
+          .text("English 🇺🇸", "lang_en");
 
-        <script>
-            async function downloadVideo() {
-                const videoUrl = document.getElementById('vUrl').value;
-                const status = document.getElementById('status');
-                const btn = document.getElementById('btn');
+        await ctx.reply(strings.en.welcome, { reply_markup: keyboard });
+      });
 
-                if(!videoUrl) return alert("ሊንክ ያስገቡ!");
+      // Handle Language Selection
+      bot.callbackQuery(/lang_(.+)/, async (ctx) => {
+        const lang = ctx.match[1];
+        const userId = ctx.from.id;
+        const username = ctx.from.username || "Unknown";
 
-                status.innerHTML = '<div class="loader"></div> በመፈለግ ላይ...';
-                btn.disabled = true;
+        // Save/Update user in D1
+        await env.DB.prepare(
+          "INSERT INTO users (id, username, language) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET language = EXCLUDED.language"
+        )
+          .bind(userId, username, lang)
+          .run();
 
-                try {
-                    const res = await fetch('/api/download', {
-                        method: 'POST',
-                        body: JSON.stringify({ videoUrl })
-                    });
-                    const data = await res.json();
+        const langStrings = strings[lang] || strings.en;
+        const contactKeyboard = new Keyboard()
+          .requestContact(langStrings.contact_button)
+          .oneTime()
+          .resized();
 
-                    if(data.url) {
-                        status.innerHTML = '✅ ዝግጁ ነው!<br><br><a href="' + data.url + '" class="dl-link" target="_blank">አሁን አውርድ (Download)</a>';
-                    } else {
-                        status.innerHTML = '❌ ስህተት ተፈጥሯል። እባክዎ ሊንኩን ያረጋግጡ።';
-                    }
-                } catch (e) {
-                    status.innerHTML = '❌ ሰርቨሩ ምላሽ አልሰጠም።';
-                }
-                btn.disabled = false;
+        await ctx.answerCallbackQuery();
+        await ctx.reply(langStrings.request_contact, { reply_markup: contactKeyboard });
+      });
+
+      // Handle Contact Sharing
+      bot.on("message:contact", async (ctx) => {
+        const phone = ctx.message.contact.phone_number;
+        const userId = ctx.from.id;
+
+        await env.DB.prepare("UPDATE users SET phone_number = ? WHERE id = ?")
+          .bind(phone, userId)
+          .run();
+
+        const userData = await getUser(ctx);
+        const lang = userData?.language || "en";
+        await ctx.reply(strings[lang].reg_success, { reply_markup: { remove_keyboard: true } });
+      });
+
+      // Admin Broadcast Command
+      bot.command("broadcast", async (ctx) => {
+        if (ctx.from.id.toString() !== env.ADMIN_ID) {
+          return ctx.reply(strings.en.admin_only);
+        }
+        await ctx.reply("📢 " + strings.en.broadcast_prompt + "\n\n(Tip: Reply to this message with any media or text)");
+      });
+
+      // --- 4. Main Message Handler (AI Search & Broadcast Execution) ---
+      bot.on("message", async (ctx) => {
+        const isAdmin = ctx.from.id.toString() === env.ADMIN_ID;
+        const userData = await getUser(ctx);
+        const lang = userData?.language || "en";
+
+        // A. Execution of Broadcast (If Admin replies to a broadcast prompt)
+        if (isAdmin && ctx.message.reply_to_message && ctx.message.reply_to_message.text.includes("broadcast")) {
+          const { results } = await env.DB.prepare("SELECT id FROM users").all();
+          let count = 0;
+
+          for (const user of results) {
+            try {
+              // copyMessage sends any type of message (video, doc, sticker, text)
+              await ctx.api.copyMessage(user.id, ctx.chat.id, ctx.message.message_id);
+              count++;
+            } catch (e) {
+              console.log(`Failed to send to ${user.id}`);
             }
-        </script>
-    </body>
-    </html>
-    `;
+          }
+          return ctx.reply(strings[lang].broadcast_done.replace("{count}", count));
+        }
 
-    return new Response(html, {
-      headers: { "Content-Type": "text/html; charset=UTF-8" },
-    });
+        // B. AI Search (If user sends plain text)
+        if (ctx.message.text && !ctx.message.text.startsWith("/")) {
+          const query = ctx.message.text;
+          await ctx.reply(strings[lang].search_searching);
+
+          try {
+            const searchResponse = await fetch("https://google.serper.dev/search", {
+              method: "POST",
+              headers: {
+                "X-API-KEY": env.SERPER_API_KEY,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ q: query, gl: "et" }), // Search focused on Ethiopia
+            });
+
+            const data = await searchResponse.json();
+            
+            if (data.organic && data.organic.length > 0) {
+              // Take the top 3 results
+              let responseText = `🔍 **Search Results:**\n\n`;
+              data.organic.slice(0, 3).forEach((item, index) => {
+                responseText += `${index + 1}. *${item.title}*\n📖 ${item.snippet}\n🔗 [Read More](${item.link})\n\n`;
+              });
+              
+              await ctx.reply(responseText, { parse_mode: "Markdown", disable_web_page_preview: false });
+            } else {
+              await ctx.reply(strings[lang].search_no_result);
+            }
+          } catch (err) {
+            await ctx.reply("⚠️ Error connecting to search service. Please try again later.");
+          }
+        }
+      });
+
+      // Initialize Webhook
+      return webhookCallback(bot, "cloudflare-workers")(request);
+    }
+    
+    return new Response("Bot is active and running on Cloudflare Workers!");
   },
 };
+        
